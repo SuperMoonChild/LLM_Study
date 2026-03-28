@@ -366,4 +366,217 @@ for r in results:
 如果precision 很低 召回很多无关文档 ，改变reranker 
 
 
-*整理时间：2026年3月 | 面试备考笔记*
+# RAG 面试 Cheatsheet — 重点易错知识点
+
+> 专项复习：MRR、Precision & Recall、RAGAS诊断
+
+---
+
+## 1. Precision & Recall — 彻底搞清楚
+
+### 核心公式
+
+```
+Precision = 正确结果数 / 你返回的总数        ← 分母是"你返回的"
+Recall    = 正确结果数 / 数据库里总正确数     ← 分母是"全世界正确的"
+```
+
+### 最容易混淆的点
+
+| 指标 | 问的问题 | 分母是谁 | 衡量什么 |
+|---|---|---|---|
+| Precision | 我说的对不对？ | 我返回的文档数 | 准不准 |
+| Recall | 我找全了没？ | 数据库里所有正确文档数 | 全不全 |
+
+### 计算例子（必须会）
+
+```
+场景：数据库里有50篇相关文档
+      系统返回了20篇
+      其中15篇是真正相关的
+
+Precision = 15 / 20 = 75%   ← 除以"你返回的20篇"
+Recall    = 15 / 50 = 30%   ← 除以"数据库里总共50篇"
+```
+
+### 生活记忆法
+
+> 老师出了10道题，你答了8道，其中6道对了
+> - Precision = 6/8 = 75%（你答的里面有多少对）
+> - Recall    = 6/10 = 60%（全部题目里你对了多少）
+
+### F1 Score — 平衡两者
+
+```
+F1 = 2 × (Precision × Recall) / (Precision + Recall)
+
+例子：P=0.8，R=0.4
+F1 = 2 × (0.8 × 0.4) / (0.8 + 0.4)
+   = 2 × 0.32 / 1.2
+   = 0.53
+
+注意：F1比普通平均值(0.6)更低！调和平均数对低值更敏感
+```
+
+### Trade-off 记忆表
+
+| 想提高 | 代价 | RAG里怎么做 |
+|---|---|---|
+| Recall ↑ | Precision ↓ | 撒大网：Hybrid Search，增大Top-K |
+| Precision ↑ | Recall ↓ | 精挑细选：加Reranker精排 |
+| 两者都要 | 两步走 | 先Hybrid Search保Recall → 再Reranker保Precision |
+
+### 不同场景优先谁？
+
+| 场景 | 优先 | 原因 |
+|---|---|---|
+| RAG检索阶段 | Recall | 漏掉文档→LLM没素材→答案不完整 |
+| Reranking阶段 | Precision | 已召回，现在要过滤噪音 |
+| 医疗诊断 | Recall | 漏诊比误诊危险 |
+| 垃圾邮件过滤 | Precision | 误判正常邮件更烦 |
+
+---
+
+## 2. MRR — 平均倒数排名
+
+### 核心概念
+
+**MRR只看第一个正确答案排在第几位，越靠前越好**
+
+### 倒数排名得分表（必背）
+
+| 正确答案位置 | 得分 |
+|---|---|
+| 第1位 | 1/1 = **1.0** 🏆 |
+| 第2位 | 1/2 = **0.5** |
+| 第3位 | 1/3 = **0.33** |
+| 第4位 | 1/4 = **0.25** |
+| 第5位 | 1/5 = **0.20** |
+| 没找到 | **0** |
+
+### 完整计算例子
+
+```
+问题1：返回 [❌, ❌, ✅, ❌, ❌]  → 第3位 → 1/3 = 0.33
+问题2：返回 [✅, ❌, ❌, ❌, ❌]  → 第1位 → 1/1 = 1.0
+问题3：返回 [❌, ✅, ❌, ❌, ❌]  → 第2位 → 1/2 = 0.5
+
+MRR = (0.33 + 1.0 + 0.5) / 3 = 1.83 / 3 = 0.61
+```
+
+### 关键点
+
+- 只看**第一个**正确答案，后面有几个对的不管
+- 多个问题取**平均值**才是最终MRR
+- 用倒数是因为：第1→2位影响大(差0.5)，第9→10位影响小(差0.01)
+
+### MRR vs Recall@K 的区别
+
+| 指标 | 关注什么 | 适合场景 |
+|---|---|---|
+| MRR | 第一个正确答案的位置 | 用户只看第一个结果 |
+| Recall@K | Top-K里有没有正确答案 | 用户会浏览多个结果 |
+
+---
+
+## 3. RAGAS框架诊断表 — 最重要！
+
+### 四大指标含义
+
+| 指标 | 衡量什么阶段 | 含义 |
+|---|---|---|
+| **Context Recall** | 检索阶段 | 相关文档有没有被召回 |
+| **Context Precision** | 检索阶段 | 召回的文档有多少是真正相关的 |
+| **Faithfulness** | 生成阶段 | 答案是否忠实于检索内容，有无幻觉 |
+| **Answer Relevancy** | 生成阶段 | 答案是否回答了用户的问题 |
+
+---
+
+### 诊断 + 补救完整指南
+
+#### ① Context Recall 低
+```
+症状：正确文档没被召回，LLM缺乏素材
+根本原因：检索阶段漏掉了相关文档
+```
+**补救方案：**
+- 换更强的Embedding模型（BGE-M3 / Qwen3-Embedding）
+- 加入Hybrid Search（BM25 + 语义检索 + RRF）
+- 增大Top-K召回数量（从5增到20）
+- 优化Chunking策略（加Sliding Window overlap）
+- 用HyDE：先让LLM生成假设答案再检索
+
+---
+
+#### ② Context Precision 低
+```
+症状：召回了太多无关文档，LLM被噪音干扰
+根本原因：初步召回过于宽松
+```
+**补救方案：**
+- 加入Reranker精排（BGE-reranker / Cohere Rerank）
+- 减小最终传给LLM的Top-K数量
+- 提高相似度阈值，过滤低分文档
+- 用CRAG验证文档相关性
+
+---
+
+#### ③ Faithfulness 低
+```
+症状：LLM答案里有文档没有的内容（幻觉）
+根本原因：生成阶段LLM在编造内容
+```
+**补救方案：**
+- 改Prompt：明确加入"只能基于以下文档回答，不能编造"
+- 用CRAG：生成后验证答案是否被文档支持
+- 用Self-RAG：让LLM生成反思token自我评估
+- 换更听话的LLM（GPT-4o比老版本更可控）
+
+---
+
+#### ④ Answer Relevancy 低
+```
+症状：答案跑题，没有回答用户真正的问题
+根本原因：Query理解偏差或Prompt设计问题
+```
+**补救方案：**
+- Query重写：用LLM先把用户问题改写得更清晰
+- 改Prompt：明确"请直接回答用户的问题：{question}"
+- 检查Chunking：chunk太大可能导致检索到不相关段落
+
+---
+
+### 一眼看懂诊断图
+
+```
+                    ┌─────────────────────────────┐
+                    │     RAGAS 诊断速查           │
+                    └─────────────────────────────┘
+
+Context Recall 低   →  检索漏文档  →  换Embedding / Hybrid Search
+Context Precision 低 → 噪音太多   →  加Reranker
+Faithfulness 低     →  LLM幻觉    →  改Prompt / CRAG / Self-RAG  
+Answer Relevancy 低 →  答案跑题   →  Query重写 / 改Prompt
+
+组合诊断：
+Context Recall高 + Faithfulness低  = 检索好但LLM在编造 → 改Prompt
+Context Recall低 + Faithfulness高  = LLM很老实但没素材 → 改Embedding
+两个Context都低                    = 根本没检索到好东西 → 重做检索系统
+```
+
+---
+
+## 4. 面试万能回答模板
+
+### 问：Precision和Recall有什么区别？
+> "Precision衡量返回结果的质量——我返回的文档里有多少是真正相关的；Recall衡量覆盖度——数据库里所有相关文档我找到了多少。分母是关键区别：Precision除以我返回的总数，Recall除以全库相关文档总数。在RAG里，检索阶段优先Recall，Reranking阶段优先Precision。"
+
+### 问：MRR是什么？
+> "MRR是平均倒数排名，衡量第一个正确答案排在什么位置。排第1位得1.0分，第2位得0.5分，以此类推取倒数。多个问题取平均就是MRR。MRR低说明正确文档排名靠后，需要优化Reranker。"
+
+### 问：RAG效果不好怎么排查？
+> "我会用RAGAS框架系统排查：先看Context Recall，低说明检索漏文档，换更好的Embedding或加Hybrid Search；再看Context Precision，低说明噪音太多，加Reranker；再看Faithfulness，低说明LLM幻觉，改Prompt加约束；最后看Answer Relevancy，低说明答案跑题，做Query重写。"
+
+---
+
+*面试备考 | 2026年3月*
